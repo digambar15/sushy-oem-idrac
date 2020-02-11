@@ -58,3 +58,22 @@ class ManagerTestCase(BaseTestCase):
         self.conn.post.assert_called_once_with(
             '/redfish/v1/Managers/iDRAC.Embedded.1/Actions/Oem/EID_674_Manager'
             '.ImportSystemConfiguration', data=mock.ANY)
+
+    @mock.patch('sushy.resources.oem.common._global_extn_mgrs_by_resource', {})
+    def test_export_system_configuration_uri(self):
+        oem = self.manager.get_oem_extension('Dell')
+
+        self.assertEqual(
+            '/redfish/v1/Managers/iDRAC.Embedded.1/Actions/Oem/EID_674_Manager'
+            '.ExportSystemConfiguration',
+            oem.export_system_configuration_uri)
+
+    @mock.patch('sushy.resources.oem.common._global_extn_mgrs_by_resource', {})
+    def test_export_system_configuration(self):
+        oem = self.manager.get_oem_extension('Dell')
+
+        oem.export_system_configuration(target="ALL")
+
+        self.conn.post.assert_called_once_with(
+            '/redfish/v1/Managers/iDRAC.Embedded.1/Actions/Oem/EID_674_Manager'
+            '.ExportSystemConfiguration', data=mock.ANY)

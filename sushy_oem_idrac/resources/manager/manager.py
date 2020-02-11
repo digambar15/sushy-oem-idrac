@@ -30,6 +30,10 @@ class DellManagerActionsField(base.CompositeField):
         lambda key, **kwargs: key.endswith(
             '#OemManager.ImportSystemConfiguration'))
 
+    export_system_configuration = common.ActionField(
+        lambda key, **kwargs: key.endswith(
+            '#OemManager.ExportSystemConfiguration'))
+
 
 class DellManagerExtension(oem_base.OEMResourceBase):
 
@@ -82,6 +86,10 @@ VFDD\
     @property
     def import_system_configuration_uri(self):
         return self._actions.import_system_configuration.target_uri
+
+    @property
+    def export_system_configuration_uri(self):
+        return self._actions.export_system_configuration.target_uri
 
     def set_virtual_boot_device(self, device, persistent=False,
                                 manager=None, system=None):
@@ -169,6 +177,32 @@ VFDD\
                     raise
 
                 attempts -= 1
+
+    def export_system_configuration(self, target):
+        """Export system configuration
+
+        :param target: To export all or particular component
+                       configuration of system
+            supported values are { ALL, System, BIOS, IDRAC, NIC, FC,
+                                  LifecycleController, RAID}
+        :raises: InvalidParameterValue if Dell OEM extension can't
+            be used.
+        :raises: ExtensionError on failure to perform requested
+            operation
+        """
+        action_data = dict(ShareParameters={'Target': target},
+                           ExportFormat="XML")
+        try:
+            response = asynchronous.http_call(
+                self._conn,
+                'post',
+                self.export_system_configuration_uri,
+                data=action_data)
+            return response
+        except (sushy.exceptions.ServerSideError,
+                sushy.exceptions.BadRequestError) as exc:
+            LOG.error('Dell OEM export system configuration failed : %s', exc)
+            raise
 
 
 def get_extension(*args, **kwargs):

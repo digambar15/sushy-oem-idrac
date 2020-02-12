@@ -71,7 +71,6 @@ class ManagerTestCase(BaseTestCase):
     @mock.patch('sushy.resources.oem.common._global_extn_mgrs_by_resource', {})
     def test_export_system_configuration(self):
         oem = self.manager.get_oem_extension('Dell')
-
         oem.export_system_configuration(target="ALL")
 
         self.conn.post.assert_called_once_with(

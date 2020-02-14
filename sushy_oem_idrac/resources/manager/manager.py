@@ -14,7 +14,6 @@ import logging
 import time
 import re
 import json
-import retrying
 
 import sushy
 from sushy.resources import base
@@ -27,24 +26,23 @@ from sushy_oem_idrac import utils
 
 LOG = logging.getLogger(__name__)
 
-IDRAC_IS_READY_RETRIES = 96
-IDRAC_IS_READY_RETRY_DELAY_SEC =10
-
 class DellManagerActionsField(base.CompositeField):
     import_system_configuration = common.ActionField(
         lambda key, **kwargs: key.endswith(
             '#OemManager.ImportSystemConfiguration'))
-
 
 class DellManagerIdRefField(base.CompositeField):
     job_service = common.IdRefField(
         lambda key, **kwargs: key.startswith(
             'DellJobService'))
 
+    jobs = common.IdRefField(
+        lambda key, **kwargs: key.startswith(
+            'Jobs'))
+
     lc_service = common.IdRefField(
         lambda key, **kwargs: key.startswith(
             'DellLCService'))
-
 
 class DellManagerExtension(oem_base.OEMResourceBase):
 
@@ -59,8 +57,9 @@ class DellManagerExtension(oem_base.OEMResourceBase):
     }
 
     HEADERS = {'content-type': 'application/json'}
-    clear_jobs = '/Actions/DellJobService.DeleteJobQueue'
-    remote_api_status_uri = '/Actions/DellLCService.GetRemoteServicesAPIStatus'
+    CLEAR_JOBS_URI = '/Actions/DellJobService.DeleteJobQueue'
+    REMOTE_API_STATUS_URI = '/Actions/DellLCService.GetRemoteServicesAPIStatus'
+    JOB_EXPAND = '?$expand=.($levels=1)'
 
     # NOTE(etingof): iDRAC job would fail if this XML has
     # insignificant whitespaces
@@ -108,17 +107,21 @@ VFDD\
         return self._links.job_service.resource_uri
 
     @property
+    def get_jobs_uri(self):
+        return self._links.jobs.resource_uri
+
+    @property
     def get_remote_service_api_uri(self):
         return ('%s%s' %
                 (self._links.lc_service.resource_uri,
-                self.remote_api_status_uri))
+                self.REMOTE_API_STATUS_URI))
 
     def clear_job_queue(self, job_ids=['JID_CLEARALL']):
 
         if job_ids is None:
             return None
 
-        delete_job_queue_uri = '%s%s' % (self.job_service_uri, self.clear_jobs)
+        delete_job_queue_uri = '%s%s' % (self.job_service_uri, self.CLEAR_JOBS_URI)
         for job_id in job_ids:
             payload = {'JobID':job_id}
 
@@ -127,7 +130,7 @@ VFDD\
                         self._conn, 'post',
                         delete_job_queue_uri,
                         headers = self.HEADERS,
-                        data = dict(payload),
+                        data = payload,
                         verify = False)
                 return delete_job_response
 
@@ -143,7 +146,7 @@ VFDD\
             reset_job_response = asynchronous.http_call(
                             self._conn, 'post',
                             manager._actions.reset.target_uri,
-                            data=dict(payload))
+                            data=(payload))
 
         except (sushy.exceptions.ServerSideError,
                 sushy.exceptions.BadRequestError) as exc:
@@ -151,12 +154,12 @@ VFDD\
             raise sushy.exceptions.ServerSideError(error=exc)
 
         LOG.info("iDRAC has reset, Waiting for the iDRAC to become ready")
-        if(self.wait_for_idrac_ready() == True):
+        if(utils.wait_for_idrac_ready(self) == True):
             LOG.info("Dell OEM iDRAC reset successfuly")
             return reset_job_response
         else:
             err_msg = 'Timeout reched to become iDRAC ready'
-            LOG.error('Timeout reached to become iDRAC ready')
+            LOG.error(err_msg)
             raise sushy.exceptions.ConnectionError(error=err_msg)
 
     def known_good_state(self,manager=None):
@@ -164,33 +167,24 @@ VFDD\
         reset_job_response = self.reset_idrac(manager=manager)
         return [delete_job_response, reset_job_response]
 
-    @retrying.retry(
-        retry_on_exception=lambda exception: isinstance(exception, Exception),
-        stop_max_attempt_number=IDRAC_IS_READY_RETRIES,
-        wait_fixed=IDRAC_IS_READY_RETRY_DELAY_SEC * 1000)
-    def wait_for_idrac_ready(self):
-        is_ready_response = self.is_idrac_ready()
-        if "LCStatus" in is_ready_response:
-            LOG.info("idrac for node is ready")
-            return True
-        else:
-            err_msg = ('idrac for node is not ready,'
-                       'Failed to perform drac operation, Retrying it' )
-            raise sushy.exception.ConnectionError(error=err_msg)
-
-    def is_idrac_ready(self):
-
+    def get_unfinished_jobs(self):
+        jobs_expand_uri = '%s%s' %(self.get_jobs_uri, self.JOB_EXPAND)
+        unfinished_jobs = []
         try:
             response = asynchronous.http_call(
-                                self._conn, 'post',
-                                self.get_remote_service_api_uri,
-                                headers=self.HEADERS,
-                                data={},
-                                verify=False)
+                    self._conn, 'get',
+                    jobs_expand_uri,
+                    verify = False)
             data = response.json()
-        except Exception as err:
-            return err
-        return data
+            for job in data[u'Members']:
+                if((job[u'JobState'] == 'Scheduled') or
+                      (job[u'JobState'] == 'Running')):
+                    unfinished_jobs.append(job['Id'])
+            return unfinished_jobs
+        except (sushy.exceptions.ServerSideError,
+                sushy.exceptions.BadRequestError) as exc:
+            LOG.error('Dell OEM clear job queue failed, %s', err_msg)
+            raise sushy.exceptions.ServerSideError(error=exc)
 
     def set_virtual_boot_device(self, device, persistent=False,
                                 manager=None, system=None):
